@@ -63,7 +63,7 @@ public class Main {
             Host receiverHost = parser.hosts().get(receiverId - 1);
 
             for (int seq = 1; seq <= m; seq++) {
-                Message msg = new Message(parser.myId(), seq, String.valueOf(seq));
+                Message msg = new Message(parser.myId(), seq, String.valueOf(seq), Message.Type.DATA);
                 pl.send(receiverHost, msg);
             }
 
