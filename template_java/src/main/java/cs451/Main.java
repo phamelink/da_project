@@ -1,18 +1,27 @@
 package cs451;
 
+import cs451.links.Message;
+import cs451.links.PerfectLinks;
+
+import java.io.BufferedReader;
+import java.io.FileReader;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.net.Socket;
 
 public class Main {
+    private static Logger logger;
+    private static PerfectLinks pl;
 
     private static void handleSignal() {
         //immediately stop network packet processing
         System.out.println("Immediately stopping network packet processing.");
-
+        if (pl != null) {
+            pl.stop();
+        }
         //write/flush output file if necessary
         System.out.println("Writing output.");
+        if (logger != null) {
+            logger.close();
+        }
     }
 
     private static void initSignalHandlers() {
@@ -24,44 +33,50 @@ public class Main {
         });
     }
 
-    public static void main(String[] args) throws InterruptedException {
+    public static void main(String[] args) throws InterruptedException, IOException {
         Parser parser = new Parser(args);
         parser.parse();
 
         initSignalHandlers();
 
-        // example
         long pid = ProcessHandle.current().pid();
         System.out.println("My PID: " + pid + "\n");
-        System.out.println("From a new terminal type `kill -SIGINT " + pid + "` or `kill -SIGTERM " + pid + "` to stop processing packets\n");
 
-        System.out.println("My ID: " + parser.myId() + "\n");
-        System.out.println("List of resolved hosts is:");
-        System.out.println("==========================");
-        for (Host host: parser.hosts()) {
-            System.out.println(host.getId());
-            System.out.println("Human-readable IP: " + host.getIp());
-            System.out.println("Human-readable Port: " + host.getPort());
-            System.out.println();
+        logger = new Logger(parser.output());
+
+        // Parse config: "m i"
+        int m, receiverId;
+        try (BufferedReader br = new BufferedReader(new FileReader(parser.config()))) {
+            String[] parts = br.readLine().trim().split("\\s+");
+            m = Integer.parseInt(parts[0]);
+            receiverId = Integer.parseInt(parts[1]);
         }
-        System.out.println();
 
-        System.out.println("Path to output:");
-        System.out.println("===============");
-        System.out.println(parser.output() + "\n");
+        Host self = parser.hosts().get(parser.myId() - 1);
+        pl = new PerfectLinks(self, parser.hosts(), logger);
 
-        System.out.println("Path to config:");
-        System.out.println("===============");
-        System.out.println(parser.config() + "\n");
+        pl.start(); // start receiver thread
 
-        System.out.println("Doing some initialization\n");
+        // --- Role decision ---
+        if (parser.myId() != receiverId) {
+            // Sender
+            Host receiverHost = parser.hosts().get(receiverId - 1);
+
+            for (int seq = 1; seq <= m; seq++) {
+                Message msg = new Message(parser.myId(), seq, String.valueOf(seq));
+                pl.send(receiverHost, msg);
+            }
+
+            System.out.println("All messages sent.");
+        } else {
+            // Receiver: does nothing except deliver in callback
+            System.out.println("Running as receiver (id = " + receiverId + ")");
+        }
 
         System.out.println("Broadcasting and delivering messages...\n");
 
-        // After a process finishes broadcasting,
-        // it waits forever for the delivery of messages.
+        // Wait forever (until SIGINT/SIGTERM)
         while (true) {
-            // Sleep for 1 hour
             Thread.sleep(60 * 60 * 1000);
         }
     }
