@@ -15,7 +15,7 @@ public class Logger {
     public Logger(String outputPath) throws IOException {
         this.writer = new BufferedWriter(new FileWriter(outputPath));
     }
-    
+
     private void log(String line) {
         lock.lock();
         try {
@@ -65,8 +65,10 @@ public class Logger {
         switch (eventType) {
             case Sending:
                 this.log(String.format("b %s", msg.getPayload()));
+                break;
             case Delivery:
                 this.log(String.format("d %s %s", msg.getSenderId(), msg.getPayload()));
+                break;
         }
     }
 

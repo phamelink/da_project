@@ -8,11 +8,14 @@ public class Message implements Serializable {
     private final int seqNum;
     private final String payload;
 
+    private final Type type;
 
-    public Message(int senderId, int seqNum, String payload) {
+
+    public Message(int senderId, int seqNum, String payload, Type type) {
         this.senderId = senderId;
         this.seqNum = seqNum;
         this.payload = payload;
+        this.type = type;
     }
 
     public int getSenderId() {
@@ -25,6 +28,22 @@ public class Message implements Serializable {
 
     public String getPayload() {
         return payload;
+    }
+
+    public Type getType() {
+        return this.type;
+    }
+
+    public Message createAck(int selfId) {
+        return new Message(selfId, this.seqNum, this.payload, Type.ACK);
+    }
+
+    @Override
+    public String toString() {
+        return "Message{" +
+                "senderId=" + senderId +
+                ", seqNum=" + seqNum + '\'' +
+                '}';
     }
 
     public static Message deserialize(byte[] data) throws IOException {
@@ -42,5 +61,10 @@ public class Message implements Serializable {
             objOut.writeObject(this);
         }
         return byteStream.toByteArray();
+    }
+
+    public enum Type {
+        ACK,
+        DATA
     }
 }
