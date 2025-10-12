@@ -31,7 +31,7 @@ public class PerfectLinks {
 
     // --- State for PL2 (No Duplication) - Memory Efficient Bounded State ---
     // Key: senderId -> Highest sequence number delivered from that sender.
-    private final ConcurrentMap<Integer, Integer> lastDeliveredSeqNum;
+    private final ConcurrentMap<Integer, ConcurrentMap<Integer, String>> deliveredMessages;
 
 
     public PerfectLinks(Host self, List<Host> allHosts, Logger logger) {
@@ -43,7 +43,7 @@ public class PerfectLinks {
 
             this.processMap = new ConcurrentHashMap<>();
             this.pendingMessages = new ConcurrentHashMap<>();
-            this.lastDeliveredSeqNum = new ConcurrentHashMap<>();
+            this.deliveredMessages = new ConcurrentHashMap<>();
 
             // Initialize maps for all potential communicators
             for (Host h : allHosts) {
@@ -53,7 +53,7 @@ public class PerfectLinks {
                     this.pendingMessages.put(h.getId(), new ConcurrentHashMap<>());
                 }
                 // All processes track last delivered sequence number from ALL processes (initialize to 0)
-                this.lastDeliveredSeqNum.put(h.getId(), 0);
+                this.deliveredMessages.put(h.getId(), new ConcurrentHashMap<>());
             }
 
             // The receiver calls deliverMessage, which acts as the packet dispatcher.
@@ -134,23 +134,12 @@ public class PerfectLinks {
 
         // 2. PL2 Check (No Duplication) and Delivery: Atomic update
 
-        // Use compute to perform the read-modify-write operation atomically
-        this.lastDeliveredSeqNum.compute(senderId, (key, currentLastSeq) -> {
-            int safeLastSeq = currentLastSeq == null ? 0 : currentLastSeq;
-
-            if (seqNum == safeLastSeq + 1) {
-                // This is a new message. Log delivery and update tracker.
-                this.logger.logMessage(dataMsg, Logger.EventType.Delivery);
-                return seqNum;
-            }
-            // It's a duplicate (seqNum <= safeLastSeq). Keep the tracker at the current highest seqNum.
-            return safeLastSeq;
-        });
-
-        if (this.lastDeliveredSeqNum.get(senderId) <= seqNum) {
-            // 3. Always send ACK back to the original sender (PL1 mechanism)
-            this.send(senderHost, dataMsg.createAck(this.selfProcess.getId()));
+        ConcurrentMap<Integer, String> delivredMsgs = this.deliveredMessages.get(senderId);
+        if (!delivredMsgs.containsKey(seqNum)) {
+            this.logger.logMessage(dataMsg, Logger.EventType.Delivery);
+            delivredMsgs.put(seqNum, dataMsg.toString());
         }
+        this.send(senderHost, dataMsg.createAck(this.selfProcess.getId()));
     }
 
     private void sendPacket(Host dest, Message msg) {
