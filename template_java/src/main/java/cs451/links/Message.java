@@ -42,7 +42,9 @@ public class Message implements Serializable {
     public String toString() {
         return "Message{" +
                 "senderId=" + senderId +
-                ", seqNum=" + seqNum + '\'' +
+                ", seqNum=" + seqNum +
+                ", payload='" + payload + '\'' +
+                ", type=" + type +
                 '}';
     }
 

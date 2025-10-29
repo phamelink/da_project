@@ -12,7 +12,7 @@ import java.util.concurrent.ConcurrentMap;
 
 public class PerfectLinks {
     // Retransmission delay
-    private static final int RETRANSMISSION_TIMEOUT_MS = 100;
+    private static final int RETRANSMISSION_TIMEOUT_MS = 300;
 
     // --- Components ---
     private final UdpReceiver receiver;
@@ -27,11 +27,12 @@ public class PerfectLinks {
     // --- State for PL1 (Reliable Delivery) ---
     // Key: receiverId -> Map<seqNum, Message> - Messages sent but not ACKed.
     private final ConcurrentMap<Integer, ConcurrentMap<Integer, Message>> pendingMessages;
-    private final RetransmissionThread retransmissionThread;
+    // Key: senderId -> Map<seqNum, Message> - Messages received out-of-order.
+    private final ConcurrentMap<Integer, ConcurrentMap<Integer, Message>> receivedBuffer;
+    // Key: senderId -> Integer - The sequence number of the last delivered message.
+    private final ConcurrentMap<Integer, Integer> lastDeliveredSeqNum;
 
-    // --- State for PL2 (No Duplication) - Memory Efficient Bounded State ---
-    // Key: senderId -> Highest sequence number delivered from that sender.
-    private final ConcurrentMap<Integer, ConcurrentMap<Integer, String>> deliveredMessages;
+    private final RetransmissionThread retransmissionThread;
 
 
     public PerfectLinks(Host self, List<Host> allHosts, Logger logger) {
@@ -43,7 +44,8 @@ public class PerfectLinks {
 
             this.processMap = new ConcurrentHashMap<>();
             this.pendingMessages = new ConcurrentHashMap<>();
-            this.deliveredMessages = new ConcurrentHashMap<>();
+            this.receivedBuffer = new ConcurrentHashMap<>();
+            this.lastDeliveredSeqNum = new ConcurrentHashMap<>();
 
             // Initialize maps for all potential communicators
             for (Host h : allHosts) {
@@ -52,8 +54,8 @@ public class PerfectLinks {
                 if (h.getId() != self.getId()) {
                     this.pendingMessages.put(h.getId(), new ConcurrentHashMap<>());
                 }
-                // All processes track last delivered sequence number from ALL processes (initialize to 0)
-                this.deliveredMessages.put(h.getId(), new ConcurrentHashMap<>());
+                this.receivedBuffer.put(h.getId(), new ConcurrentHashMap<>());
+                this.lastDeliveredSeqNum.put(h.getId(), 0);
             }
 
             // The receiver calls deliverMessage, which acts as the packet dispatcher.
@@ -95,13 +97,15 @@ public class PerfectLinks {
                 this.pendingMessages.get(dest.getId()).put(msg.getSeqNum(), msg);
             }
         }
-        this.sender.send(dest, msg);
+        this.sendPacket(dest, msg);
     }
 
     public void deliverMessage(Message msg) {
         if (msg.getType() == Message.Type.ACK) {
+//            System.out.println("Received ACK msg: " + msg.toString());
             handleAck(msg);
         } else if (msg.getType() == Message.Type.DATA) {
+//            System.out.println("Received DATA msg: " + msg.toString());
             handleData(msg);
         } else {
             System.err.println("Received message of unknown type: " + msg.getType());
@@ -128,21 +132,52 @@ public class PerfectLinks {
         // 1. Get the host of the sender to send an ACK back
         Host senderHost = processMap.get(senderId);
         if (senderHost == null) {
-            System.err.println("Received DATA message from unknown sender ID: " + senderId);
+//            System.err.println("Received DATA message from unknown sender ID: " + senderId);
             return;
         }
 
-        // 2. PL2 Check (No Duplication) and Delivery: Atomic update
+        this.receivedBuffer.get(senderId).put(seqNum, dataMsg);
 
-        ConcurrentMap<Integer, String> delivredMsgs = this.deliveredMessages.get(senderId);
-        if (!delivredMsgs.containsKey(seqNum)) {
-            this.logger.logMessage(dataMsg, Logger.EventType.Delivery);
-            delivredMsgs.put(seqNum, dataMsg.toString());
-        }
-        this.send(senderHost, dataMsg.createAck(this.selfProcess.getId()));
+        // 3. Attempt contiguous delivery
+        deliverContiguousMessages(senderId);
     }
 
+    private void deliverContiguousMessages(int senderId) {
+        ConcurrentMap<Integer, Message> buffer = this.receivedBuffer.get(senderId);
+        if (buffer == null) return;
+
+        // Use compute for atomicity of the delivery marker update and contiguous check
+        this.lastDeliveredSeqNum.compute(senderId, (id, lastDelivered) -> {
+            int currentMax = (lastDelivered != null) ? lastDelivered : 0;
+            int nextSeq = currentMax + 1;
+
+            // Loop to deliver all messages that are now contiguous
+            while (true) {
+                Message nextMessage = buffer.get(nextSeq);
+
+                if (nextMessage != null) {
+                    // Found the next contiguous message: deliver and advance the sequence number
+
+                    // PL2 check is implicit here: since we only deliver nextSeq, 
+                    // any message with seqNum <= currentMax has been delivered/logged already.
+                    this.logger.logMessage(nextMessage, Logger.EventType.Delivery);
+                    buffer.remove(nextSeq); // Cleanup the message from the buffer (Memory Reclamation!)
+
+                    nextSeq++;
+                } else {
+                    // Gap found (or buffer is empty). Stop delivery.
+                    break;
+                }
+            }
+
+            // Return the new high-water mark (or the old one if nothing was delivered)
+            return nextSeq - 1;
+        });
+    }
+
+
     private void sendPacket(Host dest, Message msg) {
+//        System.out.println("Sending packet to " + dest.getId() + ": " + msg.toString());
         this.sender.send(dest, msg);
     }
 
@@ -156,7 +191,10 @@ public class PerfectLinks {
 
         @Override
         public void run() {
+//            int count = 0;
             while (running) {
+//                System.out.println("Retry count " + count);
+//                count++;
                 try {
                     // Iterate over all receivers that THIS process is sending to
                     for (Map.Entry<Integer, ConcurrentMap<Integer, Message>> entry : pendingMessages.entrySet()) {
@@ -171,6 +209,7 @@ public class PerfectLinks {
                                 // Re-send all messages in the pending map for this receiver
                                 for (Message msgToRetry : pendingForReceiver.values()) {
                                     // Use the low-level sendPacket method for retries to avoid unnecessary tracking/logging.
+//                                    System.out.println("Retrying to send msg: " + msgToRetry.toString());
                                     sendPacket(destHost, msgToRetry);
                                 }
                             }

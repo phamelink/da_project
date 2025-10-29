@@ -68,12 +68,13 @@ public class Main {
             }
 
             System.out.println("All messages sent.");
-        } else {
-            // Receiver: does nothing except deliver in callback
-            System.out.println("Running as receiver (id = " + receiverId + ")");
         }
+//        else {
+//            // Receiver: does nothing except deliver in callback
+//            System.out.println("Running as receiver (id = " + receiverId + ")");
+//        }
 
-        System.out.println("Broadcasting and delivering messages...\n");
+//        System.out.println("Broadcasting and delivering messages...\n");
 
         // Wait forever (until SIGINT/SIGTERM)
         while (true) {
